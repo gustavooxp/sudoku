@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sudoku</title>
+  <style>
+    :root { font-family: system-ui, Arial, sans-serif; color-scheme: dark; --bg: #101827; --panel: #192538; --line: #40516a; --text: #f2f6ff; --muted: #aab9ce; --accent: #64d6c2; --error: #ff8e8e; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top, #263d59, var(--bg) 62%); color: var(--text); }
+    main { width: min(94vw, 650px); margin: 0 auto; padding: 32px 0 48px; text-align: center; }
+    h1 { margin: 0 0 6px; font-size: clamp(2rem, 6vw, 3rem); }
+    .subtitle { margin: 0 0 24px; color: var(--muted); }
+    .panel { padding: clamp(14px, 4vw, 28px); background: var(--panel); border: 1px solid var(--line); border-radius: 20px; box-shadow: 0 20px 60px #0005; }
+    .toolbar, .actions, .numpad { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; }
+    .toolbar { margin-bottom: 18px; }
+    button, select { font: inherit; }
+    button, select { border: 1px solid var(--line); border-radius: 10px; background: #263750; color: var(--text); padding: 10px 14px; cursor: pointer; }
+    button:hover, select:hover { border-color: var(--accent); }
+    button:focus-visible, select:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+    button.active { background: var(--accent); color: #10212a; border-color: var(--accent); font-weight: 700; }
+    label { display: inline-flex; align-items: center; gap: 8px; }
+    .board { display: grid; grid-template-columns: repeat(9, 1fr); width: min(100%, 540px); margin: 0 auto 18px; border: 3px solid var(--accent); border-radius: 7px; overflow: hidden; background: var(--line); }
+    .cell { display: grid; place-items: center; aspect-ratio: 1; min-width: 0; padding: 0; border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0; background: #172337; font-size: clamp(1rem, 4vw, 1.55rem); font-weight: 700; }
+    .cell:hover { background: #30465e; }
+    .cell.given { color: #fff; background: #25344b; cursor: default; }
+    .cell.user { color: var(--accent); }
+    .cell.error { color: var(--error); }
+    .cell.selected { background: #355e66; }
+    .cell.peer { background: #263e50; }
+    .cell.box-right { border-right: 3px solid var(--accent); }
+    .cell.box-bottom { border-bottom: 3px solid var(--accent); }
+    .notes { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); width: 100%; height: 100%; align-items: center; color: var(--muted); font-size: clamp(.45rem, 1.6vw, .7rem); font-weight: 500; }
+    .numpad { margin: 0 auto 16px; }
+    .numpad button { width: 46px; min-height: 46px; padding: 5px; font-size: 1.15rem; font-weight: 700; }
+    .numpad button.complete { visibility: hidden; }
+    .actions { margin-bottom: 10px; }
+    .status { min-height: 1.5em; margin: 13px 0 0; color: var(--accent); font-weight: 600; }
+    .help { color: var(--muted); font-size: .92rem; line-height: 1.5; }
+    @media (max-width: 480px) { .numpad { gap: 5px; } .numpad button { width: 32px; min-height: 40px; font-size: 1rem; } .actions button { flex: 1 1 40%; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Sudoku</h1>
+    <p class="subtitle">Complete cada linha, coluna e bloco 3 × 3 com números de 1 a 9.</p>
+    <section class="panel" aria-label="Jogo de Sudoku">
+      <div class="toolbar">
+        <label for="difficulty">Dificuldade
+          <select id="difficulty">
+            <option value="easy">Fácil</option>
+            <option value="medium">Médio</option>
+            <option value="hard">Difícil</option>
+          </select>
+        </label>
+        <button id="new-game" type="button">Novo jogo</button>
+      </div>
+      <div id="board" class="board" role="grid" aria-label="Tabuleiro de Sudoku"></div>
+      <div id="numpad" class="numpad" aria-label="Escolher número"></div>
+      <div class="actions">
+        <button id="pencil" type="button" aria-pressed="false">✏️ Lápis: desligado</button>
+        <button id="hint" type="button">💡 Dica</button>
+        <button id="erase" type="button">⌫ Apagar</button>
+      </div>
+      <p id="status" class="status" role="status" aria-live="polite">Escolha uma casa vazia para começar.</p>
+    </section>
+    <p class="help">Use os botões ou as teclas 1–9. Backspace e Delete apagam. No modo lápis, os números viram anotações.</p>
+  </main>
+  <script>
+    (() => {
+      const boardEl = document.getElementById('board');
+      const numpadEl = document.getElementById('numpad');
+      const statusEl = document.getElementById('status');
+      const difficultyEl = document.getElementById('difficulty');
+      const pencilEl = document.getElementById('pencil');
+      const removals = { easy: 36, medium: 46, hard: 52 };
+      let solution, puzzle, grid, notes, selected = null, pencilMode = false, won = false;
+
+      function shuffle(values) {
+        const result = [...values];
+        for (let i = result.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [result[i], result[j]] = [result[j], result[i]];
+        }
+        return result;
+      }
+
+      function isAllowed(board, row, col, value) {
+        for (let i = 0; i < 9; i++) {
+          if (board[row][i] === value || board[i][col] === value) return false;
+        }
+        const startRow = Math.floor(row / 3) * 3;
+        const startCol = Math.floor(col / 3) * 3;
+        for (let r = startRow; r < startRow + 3; r++) {
+          for (let c = startCol; c < startCol + 3; c++) {
+            if (board[r][c] === value) return false;
+          }
+        }
+        return true;
+      }
+
+      function fillSolution(board) {
+        for (let r = 0; r < 9; r++) {
+          for (let c = 0; c < 9; c++) {
+            if (board[r][c]) continue;
+            for (const value of shuffle([1, 2, 3, 4, 5, 6, 7, 8, 9])) {
+              if (!isAllowed(board, r, c, value)) continue;
+              board[r][c] = value;
+              if (fillSolution(board)) return true;
+              board[r][c] = 0;
+            }
+            return false;
+          }
+        }
+        return true;
+      }
+
+      function countSolutions(board, limit = 2) {
+        let best = null;
+        let bestOptions = null;
+        for (let r = 0; r < 9; r++) {
+          for (let c = 0; c < 9; c++) {
+            if (board[r][c]) continue;
+            const options = [];
+            for (let n = 1; n <= 9; n++) if (isAllowed(board, r, c, n)) options.push(n);
+            if (!options.length) return 0;
+            if (!bestOptions || options.length < bestOptions.length) {
+              best = [r, c];
+              bestOptions = options;
+            }
+          }
+        }
+        if (!best) return 1;
+        let count = 0;
+        const [r, c] = best;
+        for (const n of bestOptions) {
+          board[r][c] = n;
+          count += countSolutions(board, limit - count);
+          board[r][c] = 0;
+          if (count >= limit) return count;
+        }
+        return count;
+      }
+
+      function makePuzzle(full, target) {
+        const result = full.map(row => [...row]);
+        let removed = 0;
+        for (const position of shuffle([...Array(81).keys()])) {
+          if (removed >= target) break;
+          const r = Math.floor(position / 9);
+          const c = position % 9;
+          const old = result[r][c];
+          result[r][c] = 0;
+          if (countSolutions(result) === 1) removed++;
+          else result[r][c] = old;
+        }
+        return result;
+      }
+
+      function show(message) { statusEl.textContent = message; }
+
+      function render() {
+        boardEl.replaceChildren();
+        const correct = Array(10).fill(0);
+        for (let r = 0; r < 9; r++) {
+          for (let c = 0; c < 9; c++) {
+            if (grid[r][c] === solution[r][c]) correct[grid[r][c]]++;
+            const cell = document.createElement('button');
+            cell.type = 'button';
+            cell.className = 'cell';
+            cell.setAttribute('role', 'gridcell');
+            cell.setAttribute('aria-label', `Linha ${r + 1}, coluna ${c + 1}: ${grid[r][c] || 'vazia'}`);
+            if (c === 2 || c === 5) cell.classList.add('box-right');
+            if (r === 2 || r === 5) cell.classList.add('box-bottom');
+            if (selected && selected.r === r && selected.c === c) cell.classList.add('selected');
+            else if (selected && (selected.r === r || selected.c === c)) cell.classList.add('peer');
+            if (puzzle[r][c]) {
+              cell.textContent = puzzle[r][c];
+              cell.classList.add('given');
+            } else if (grid[r][c]) {
+              cell.textContent = grid[r][c];
+              cell.classList.add('user');
+              if (grid[r][c] !== solution[r][c]) cell.classList.add('error');
+            } else if (notes[r][c].size) {
+              const notesEl = document.createElement('span');
+              notesEl.className = 'notes';
+              for (let n = 1; n <= 9; n++) {
+                const small = document.createElement('span');
+                small.textContent = notes[r][c].has(n) ? n : '';
+                notesEl.appendChild(small);
+              }
+              cell.appendChild(notesEl);
+            }
+            cell.addEventListener('click', () => {
+              if (puzzle[r][c] || won) return;
+              selected = { r, c };
+              render();
+            });
+            boardEl.appendChild(cell);
+          }
+        }
+        for (let n = 1; n <= 9; n++) {
+          numpadEl.children[n - 1].classList.toggle('complete', correct[n] === 9);
+        }
+      }
+
+      function place(value, asNote = pencilMode) {
+        if (!selected || won || puzzle[selected.r][selected.c]) return;
+        const { r, c } = selected;
+        if (asNote) {
+          if (grid[r][c]) return;
+          if (notes[r][c].has(value)) notes[r][c].delete(value);
+          else notes[r][c].add(value);
+        } else {
+          grid[r][c] = value;
+          notes[r][c].clear();
+          if (grid.every((row, ri) => row.every((number, ci) => number === solution[ri][ci]))) {
+            won = true;
+            show('🎉 Parabéns! Você completou o Sudoku!');
+          } else if (value && value !== solution[r][c]) show('Esse número não está correto nesta casa.');
+          else show(value ? 'Boa jogada!' : 'Casa apagada.');
+        }
+        render();
+      }
+
+      function hint() {
+        if (won) return;
+        const choices = [];
+        for (let r = 0; r < 9; r++) {
+          for (let c = 0; c < 9; c++) {
+            if (grid[r][c] !== solution[r][c]) choices.push({ r, c });
+          }
+        }
+        if (!choices.length) return;
+        selected = choices[Math.floor(Math.random() * choices.length)];
+        place(solution[selected.r][selected.c], false);
+        if (!won) show('💡 Preenchi uma casa para você.');
+      }
+
+      function newGame() {
+        show('Gerando um novo jogo...');
+        solution = Array.from({ length: 9 }, () => Array(9).fill(0));
+        fillSolution(solution);
+        puzzle = makePuzzle(solution, removals[difficultyEl.value]);
+        grid = puzzle.map(row => [...row]);
+        notes = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => new Set()));
+        selected = null;
+        won = false;
+        pencilMode = false;
+        pencilEl.classList.remove('active');
+        pencilEl.setAttribute('aria-pressed', 'false');
+        pencilEl.textContent = '✏️ Lápis: desligado';
+        render();
+        show('Escolha uma casa vazia para começar.');
+      }
+
+      for (let n = 1; n <= 9; n++) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = n;
+        button.addEventListener('click', () => place(n));
+        numpadEl.appendChild(button);
+      }
+      document.getElementById('new-game').addEventListener('click', newGame);
+      difficultyEl.addEventListener('change', newGame);
+      document.getElementById('hint').addEventListener('click', hint);
+      document.getElementById('erase').addEventListener('click', () => place(0, false));
+      pencilEl.addEventListener('click', () => {
+        pencilMode = !pencilMode;
+        pencilEl.classList.toggle('active', pencilMode);
+        pencilEl.setAttribute('aria-pressed', String(pencilMode));
+        pencilEl.textContent = `✏️ Lápis: ${pencilMode ? 'ligado' : 'desligado'}`;
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key >= '1' && event.key <= '9') place(Number(event.key));
+        if (event.key === 'Backspace' || event.key === 'Delete') place(0, false);
+      });
+      newGame();
+    })();
+  </script>
+</body>
+</html>
